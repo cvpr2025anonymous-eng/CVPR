@@ -1,4 +1,3 @@
-
 import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
@@ -38,9 +37,6 @@ class Sam(nn.Module):
         return self.pixel_mean.device
 
     def _safe_cat_optional(self, values: List[Optional[Tensor]]) -> Optional[Tensor]:
-        """
-        只有全部存在且都是 Tensor 时才拼接，否则返回 None。
-        """
         if len(values) == 0:
             return None
         if any(v is None for v in values):
@@ -55,18 +51,10 @@ class Sam(nn.Module):
         input_size: Tuple[int, ...],
         original_size: Tuple[int, ...],
     ) -> Dict[str, Any]:
-        """
-        对 aux_outputs 里的 mask/logits 做统一后处理。
-        4D tensor 视作 mask/logits，按主输出一样 postprocess。
-        其他内容原样保留。
-
-        """
         processed_aux_outputs: Dict[str, Any] = {}
 
         if aux_outputs is not None:
             for key, value in aux_outputs.items():
-                # Only postprocess mask/logit-like tensors to image space.
-                # Keep feature tensors in their native decoder resolution.
                 if (
                     isinstance(value, torch.Tensor)
                     and value.dim() == 4
@@ -86,14 +74,6 @@ class Sam(nn.Module):
         self,
         outputs: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        """
-        把逐样本 aux_outputs 合并成 batch 级输出。
-
-        规则：
-        - 0D tensor: stack -> [B]
-        - >=1D tensor: cat(dim=0)
-        - 非 tensor: 跳过
-        """
         aux_outputs_merged: Dict[str, Any] = {}
 
         if len(outputs) == 0:
@@ -115,11 +95,9 @@ class Sam(nn.Module):
             if not isinstance(first_value, torch.Tensor):
                 continue
 
-            # 标量张量：按 batch 堆起来，便于后面统计 mean/min/max/std
             if first_value.dim() == 0:
                 aux_outputs_merged[key] = torch.stack(values, dim=0)
 
-            # 其他张量：按 batch 维拼接
             else:
                 aux_outputs_merged[key] = torch.cat(values, dim=0)
 
@@ -136,7 +114,6 @@ class Sam(nn.Module):
 
         image_embeddings, inter_embeddings = self.image_encoder(input_images)
 
-        # inter_embeddings: list of [B,H,W,C] -> list of [B,C,H,W]
         multi_inter_embeddings = [
             feat.permute(0, 3, 1, 2).contiguous() for feat in inter_embeddings
         ]
@@ -221,9 +198,6 @@ class Sam(nn.Module):
                 }
             )
 
-        # -----------------------------
-        # batch 级聚合
-        # -----------------------------
         masks = torch.cat([x["masks"] for x in outputs], dim=0)
 
         text_tokens = self._safe_cat_optional(
@@ -282,7 +256,6 @@ class Sam(nn.Module):
 
         x = (x - mean) / std
 
-        # Keep grayscale semantics while matching the 3-channel SAM pretraining interface.
         if x.shape[0] == 1:
             x = x.repeat(3, 1, 1)
 
