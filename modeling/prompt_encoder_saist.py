@@ -197,7 +197,7 @@ class PromptEncoder(nn.Module):
             stride=1,
             use_layernorm=True,
             use_spatial_attention=True,
-            use_multiscale_context=True,
+            use_multiscale_context=False,
             activation=activation,
         )
         self.mask_prompt_level1 = MaskPromptFeatureBlock(
@@ -206,7 +206,7 @@ class PromptEncoder(nn.Module):
             stride=2,
             use_layernorm=True,
             use_spatial_attention=True,
-            use_multiscale_context=True,
+            use_multiscale_context=False,
             activation=activation,
         )
         self.mask_prompt_level2 = MaskPromptFeatureBlock(
@@ -215,7 +215,7 @@ class PromptEncoder(nn.Module):
             stride=2,
             use_layernorm=True,
             use_spatial_attention=True,
-            use_multiscale_context=True,
+            use_multiscale_context=False,
             activation=activation,
         )
 
