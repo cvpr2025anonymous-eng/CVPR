@@ -8,19 +8,6 @@ from .common import LayerNorm2d
 
 
 class MultiLevelSceneAdapter(nn.Module):
-    """
-    Fuse multi-level ViT intermediate features into one scene feature map.
-
-    Input:
-        inter_feats:
-            - Tensor [B, C, H, W]
-            - or list/tuple of tensors, each [B, C, H, W]
-
-    Output:
-        fused:   [B, transformer_dim, H_t, W_t]
-        weights: [B, num_used_levels]
-    """
-
     def __init__(self, vit_dim=768, transformer_dim=256, inter_num_levels=4):
         super().__init__()
         if isinstance(vit_dim, (list, tuple)):
@@ -55,7 +42,6 @@ class MultiLevelSceneAdapter(nn.Module):
                 for in_dim in self.level_input_dims
             ]
         )
-        # Predict per-image level weights instead of using one static global mix.
         self.level_score = nn.Sequential(
             nn.Linear(transformer_dim * 2, gate_hidden_dim, bias=False),
             nn.GELU(),
@@ -127,8 +113,6 @@ class MultiLevelSceneAdapter(nn.Module):
 
 
 class UpscaleTo256Block(nn.Module):
-    """64x64 -> 128x128 -> 256x256."""
-
     def __init__(
         self,
         in_chans: int,
@@ -157,8 +141,6 @@ class UpscaleTo256Block(nn.Module):
 
 
 class UNetFeatureFuseBlock(nn.Module):
-    """U-Net fusion block with lightweight CBAM-style attention."""
-
     def __init__(
         self,
         skip_chans: int,
@@ -228,26 +210,6 @@ class UNetFeatureFuseBlock(nn.Module):
 
 
 class MaskDecoder(nn.Module):
-    """
-    SAIST decoder skeleton aligned with the paper branches while using a
-    simple SAM-led U-Net tail.
-
-    1. SAM branch:
-       - uses iou_token + mask_token
-
-    2. Background / Refine branch:
-       - uses background_token + text/image tokens
-       - decodes feature-level background A(z)
-       - predicts d(z)=F(I(z))
-       - applies Beer-Lambert recovery
-
-    3. Final branch:
-       - keeps the 256x256 SAM-led feature as the main path
-       - uses two transposed-convolution stages
-       - fuses 512x512 / 1024x1024 shallow encoder features
-       - outputs final_mask at 1024x1024
-    """
-
     def __init__(
         self,
         *,
@@ -499,8 +461,6 @@ class MaskDecoder(nn.Module):
         mask_token_out = sam_hs[:, 1, :]
         sam_src_feat = sam_src_seq.transpose(1, 2).view(b, c, h, w)
         sam_decode_features = self.output_upscaling(sam_src_feat)
-
-        # scene_decode_features = self.scene_feature_upscaling(scene_features)
 
         background_prompt_tokens = torch.cat(
             [
