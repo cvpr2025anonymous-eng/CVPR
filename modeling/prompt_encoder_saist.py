@@ -1,7 +1,3 @@
-
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-
 import os
 import numpy as np
 import torch
@@ -160,20 +156,6 @@ class PromptEncoder(nn.Module):
         sr_clip_ckpt_path: str = "../../ViT-B-32.pt",
         sr_clip_image_size: int = 224,
     ) -> None:
-        """
-        Encodes prompts for input to SAM's mask decoder.
-
-        This version is rewritten to match the SR-CLIP interface.
-
-        Arguments:
-          embed_dim (int): decoder token dimension, usually 256
-          image_embedding_size (tuple(int, int)): spatial size of image embeddings, e.g. (64, 64)
-          input_image_size (tuple(int, int)): padded image size for SAM image encoder, e.g. (1024, 1024)
-          mask_in_chans (int): hidden channels for mask encoding
-          activation (nn.Module): activation used in mask encoder
-          sr_clip_ckpt_path (str): path to CLIP/SR-CLIP compatible checkpoint
-          sr_clip_image_size (int): image size used by SR-CLIP input
-        """
         super().__init__()
 
         self.embed_dim = embed_dim
@@ -181,12 +163,9 @@ class PromptEncoder(nn.Module):
         self.image_embedding_size = image_embedding_size
         self.sr_clip_image_size = sr_clip_image_size
 
-        # =====================================================
-        # SAM original prompt encoding modules
-        # =====================================================
         self.pe_layer = PositionEmbeddingRandom(embed_dim // 2)
 
-        self.num_point_embeddings: int = 4  # pos/neg point + 2 box corners
+        self.num_point_embeddings: int = 4
         point_embeddings = [nn.Embedding(1, embed_dim) for _ in range(self.num_point_embeddings)]
         self.point_embeddings = nn.ModuleList(point_embeddings)
         self.not_a_point_embed = nn.Embedding(1, embed_dim)
@@ -208,7 +187,6 @@ class PromptEncoder(nn.Module):
 
         self.no_mask_embed = nn.Embedding(1, embed_dim)
 
-        # Mask-prompt dense feature branch driven by the normal image.
         self.mask_prompt_stem = nn.Sequential(
             MaskPromptFeatureBlock(3, 16, stride=1, use_layernorm=False, activation=activation),
             MaskPromptFeatureBlock(16, 16, stride=1, use_layernorm=False, activation=activation),
@@ -241,17 +219,12 @@ class PromptEncoder(nn.Module):
             activation=activation,
         )
 
-        # =====================================================
-        # SR-CLIP construction
-        # =====================================================
         ckpt_path = sr_clip_ckpt_path
         if not os.path.isabs(ckpt_path):
             ckpt_path = os.path.join(os.path.dirname(__file__), ckpt_path)
         state_dict = torch.jit.load(ckpt_path, map_location="cpu").state_dict()
         clip_backbone = build_clip_backbone(state_dict)
 
-        # Important:
-        # decoder_dim must match SAM mask decoder transformer_dim, usually 256
         self.sr_clip = SRCLIP(
             clip_backbone=clip_backbone,
             prompt_dim=clip_backbone.prompt_dim,
@@ -259,10 +232,6 @@ class PromptEncoder(nn.Module):
         )
 
     def get_dense_pe(self) -> torch.Tensor:
-        """
-        Returns positional encoding with shape:
-          1 x embed_dim x embedding_h x embedding_w
-        """
         return self.pe_layer(self.image_embedding_size).unsqueeze(0)
 
     def _embed_points(
@@ -271,7 +240,6 @@ class PromptEncoder(nn.Module):
         labels: torch.Tensor,
         pad: bool,
     ) -> torch.Tensor:
-        """Embeds point prompts."""
         points = points + 0.5
 
         if pad:
@@ -288,8 +256,7 @@ class PromptEncoder(nn.Module):
         return point_embedding
 
     def _embed_boxes(self, boxes: torch.Tensor) -> torch.Tensor:
-        """Embeds box prompts."""
-        boxes = boxes + 0.5  # shift to center of pixel
+        boxes = boxes + 0.5
         coords = boxes.reshape(-1, 2, 2)
         corner_embedding = self.pe_layer.forward_with_coords(coords, self.input_image_size)
         corner_embedding[:, 0, :] += self.point_embeddings[2].weight
@@ -297,16 +264,12 @@ class PromptEncoder(nn.Module):
         return corner_embedding
 
     def _embed_mask_inputs(self, masks: torch.Tensor) -> torch.Tensor:
-        """Embeds external low-resolution mask inputs."""
         return self.mask_downscaling(masks)
 
     def _build_mask_prompt_dense_embeddings(
         self,
         prompt_image: torch.Tensor,
     ) -> Tuple[Tensor, Tensor, Tensor]:
-        """
-        Build multi-scale mask-prompt dense features from the normal image.
-        """
         mask_prompt_1024_dense_embeddings = self.mask_prompt_level0(
             self.mask_prompt_stem(prompt_image)
         )
@@ -329,9 +292,6 @@ class PromptEncoder(nn.Module):
         masks: Optional[torch.Tensor],
         scenes: Optional[torch.Tensor] = None,
     ) -> int:
-        """
-        Gets the batch size of prompt outputs.
-        """
         if points is not None:
             return points[0].shape[0]
         elif boxes is not None:
@@ -347,16 +307,6 @@ class PromptEncoder(nn.Module):
         return self.point_embeddings[0].weight.device
 
     def _prepare_scene_image(self, scenes: torch.Tensor) -> torch.Tensor:
-        """
-        Prepare scene image for SR-CLIP.
-
-        Expected input:
-          - [3, H, W] or
-          - [1, 3, H, W]
-
-        Output:
-          - [1, 3, sr_clip_image_size, sr_clip_image_size]
-        """
         if scenes is None:
             raise ValueError("scenes must not be None when using SR-CLIP PromptEncoder.")
 
@@ -364,7 +314,6 @@ class PromptEncoder(nn.Module):
             raise TypeError(f"scenes must be a torch.Tensor, got {type(scenes)}")
 
         if scenes.dim() == 3:
-            # [3, H, W] -> [1, 3, H, W]
             scenes = scenes.unsqueeze(0)
         elif scenes.dim() == 4:
             pass
@@ -384,21 +333,6 @@ class PromptEncoder(nn.Module):
         return scenes
 
     def _prepare_captions(self, captions: torch.Tensor, device: torch.device) -> torch.Tensor:
-        """
-        Prepare caption tokens for SR-CLIP.
-
-        Expected:
-          captions should already be token ids tensor, not raw string.
-
-        Common acceptable shapes:
-          - [L]      -> add batch dim -> [1, L]
-          - [K, L]   -> treat as one image with K prompts/classes
-          - [1, K, L] is NOT directly supported by current SR-CLIP encode_text path;
-                      should usually be squeezed before passed here.
-
-        For the current SR-CLIP implementation, the safe expected shape is:
-          [K, L]
-        """
         if captions is None:
             raise ValueError("captions must not be None when using SR-CLIP PromptEncoder.")
 
@@ -410,7 +344,7 @@ class PromptEncoder(nn.Module):
         captions = captions.to(device)
 
         if captions.dim() == 1:
-            captions = captions.unsqueeze(0)  # [L] -> [1, L]
+            captions = captions.unsqueeze(0)
         elif captions.dim() == 2:
             pass
         else:
@@ -466,23 +400,6 @@ class PromptEncoder(nn.Module):
         Optional[Tensor],
         Optional[Tensor],
     ]:
-        """
-        Embeds different types of prompts and returns:
-          - sparse_embeddings: [B, N, embed_dim]
-          - dense_embeddings:  [B, embed_dim, embed_H, embed_W]
-          - text_token:        [B, embed_dim]
-          - image_token:       [B, embed_dim]
-          - prompt_aux:        dict for prompt-side auxiliary values
-          - mask_prompt_256_dense_embeddings:   [B, 64, 256, 256]
-          - mask_prompt_512_dense_embeddings:   [B, 32, 512, 512]
-          - mask_prompt_1024_dense_embeddings:  [B, 16, 1024, 1024]
-
-        Notes:
-        ------
-        This version assumes SR-CLIP is used.
-        So scenes and captions must be provided for the CLIP branch.
-        The normal image drives the mask-prompt dense branch.
-        """
         device = self._get_device()
         self.sr_clip.to(device)
 
@@ -493,22 +410,16 @@ class PromptEncoder(nn.Module):
             mask_prompt_1024_dense_embeddings,
         ) = self._build_mask_prompt_dense_embeddings(prompt_image)
 
-        # =====================================================
-        # 1. SR-CLIP tokens
-        # =====================================================
         scene_images = self._prepare_scene_image(scenes).to(device)
         caption_tokens = self._prepare_captions(captions, device)
 
         srclip_outputs = self.sr_clip(scene_images, caption_tokens)
 
-        text_token = srclip_outputs["text_token"]   # [B, embed_dim]
-        image_token = srclip_outputs["image_token"] # [B, embed_dim]
+        text_token = srclip_outputs["text_token"]
+        image_token = srclip_outputs["image_token"]
 
         prompt_aux: Dict[str, torch.Tensor] = {}
 
-        # =====================================================
-        # 2. SAM sparse / dense prompts
-        # =====================================================
         bs = self._get_batch_size(points, boxes, masks, scenes)
         dense_embeddings = self.no_mask_embed.weight.reshape(1, -1, 1, 1).expand(
             bs,
@@ -538,11 +449,6 @@ class PromptEncoder(nn.Module):
             masks = masks.to(device)
             dense_embeddings = self._embed_mask_inputs(masks)
 
-        # =====================================================
-        # 3. Batch alignment check
-        # =====================================================
-        # For your current Sam.forward() usage, decoder usually sees single-image batch.
-        # So text_token/image_token should align with prompt batch.
         if text_token.shape[0] != bs:
             if text_token.shape[0] == 1:
                 text_token = text_token.expand(bs, -1)
@@ -572,10 +478,6 @@ class PromptEncoder(nn.Module):
 
 
 class PositionEmbeddingRandom(nn.Module):
-    """
-    Positional encoding using random spatial frequencies.
-    """
-
     def __init__(self, num_pos_feats: int = 64, scale: Optional[float] = None) -> None:
         super().__init__()
         if scale is None or scale <= 0.0:
@@ -587,14 +489,12 @@ class PositionEmbeddingRandom(nn.Module):
         )
 
     def _pe_encoding(self, coords: torch.Tensor) -> torch.Tensor:
-        """Positionally encode normalized coords in [0, 1]."""
         coords = 2 * coords - 1
         coords = coords @ self.positional_encoding_gaussian_matrix
         coords = 2 * np.pi * coords
         return torch.cat([torch.sin(coords), torch.cos(coords)], dim=-1)
 
     def forward(self, size: Tuple[int, int]) -> torch.Tensor:
-        """Generate positional encoding for a grid."""
         h, w = size
         device: Any = self.positional_encoding_gaussian_matrix.device
 
@@ -606,15 +506,14 @@ class PositionEmbeddingRandom(nn.Module):
         x_embed = x_embed / w
 
         pe = self._pe_encoding(torch.stack([x_embed, y_embed], dim=-1))
-        return pe.permute(2, 0, 1)  # C x H x W
+        return pe.permute(2, 0, 1)
 
     def forward_with_coords(
         self,
         coords_input: torch.Tensor,
         image_size: Tuple[int, int],
     ) -> torch.Tensor:
-        """Positionally encode unnormalized coords."""
         coords = coords_input.clone()
         coords[:, :, 0] = coords[:, :, 0] / image_size[1]
         coords[:, :, 1] = coords[:, :, 1] / image_size[0]
-        return self._pe_encoding(coords.to(torch.float))  # B x N x C
+        return self._pe_encoding(coords.to(torch.float))
