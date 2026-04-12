@@ -140,7 +140,7 @@ class UpscaleTo256Block(nn.Module):
         return self.block(x)
 
 
-class UNetFeatureFuseBlock(nn.Module):
+class FeatureFuseBlock(nn.Module):
     def __init__(
         self,
         skip_chans: int,
@@ -183,7 +183,7 @@ class UNetFeatureFuseBlock(nn.Module):
     def forward(self, skip_feat: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         if skip_feat.shape[-2:] != x.shape[-2:]:
             raise ValueError(
-                f"UNetFeatureFuseBlock shape mismatch: "
+                f"FeatureFuseBlock shape mismatch: "
                 f"skip={tuple(skip_feat.shape)}, x={tuple(x.shape)}"
             )
         skip_feat = self.skip_proj(skip_feat)
@@ -297,20 +297,20 @@ class MaskDecoder(nn.Module):
             activation(),
         )
 
-        self.mask_up_256 = UNetFeatureFuseBlock(
+        self.mask_up_256 = FeatureFuseBlock(
             skip_chans=64,
             in_chans=self.upscaled_dim,
             out_chans=self.upscaled_dim,
             activation=activation,
         )
 
-        self.mask_up_512 = UNetFeatureFuseBlock(
+        self.mask_up_512 = FeatureFuseBlock(
             skip_chans=32,
             in_chans=32,
             out_chans=32,
             activation=activation,
         )
-        self.mask_up_1024 = UNetFeatureFuseBlock(
+        self.mask_up_1024 = FeatureFuseBlock(
             skip_chans=16,
             in_chans=16,
             out_chans=16,
