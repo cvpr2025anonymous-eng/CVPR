@@ -1,7 +1,3 @@
-
-
-
-
 from __future__ import print_function, division
 
 import numpy as np
@@ -18,7 +14,26 @@ import torch.nn.functional as F
 from torch.utils.data.distributed import DistributedSampler
 from .untils import tokenize
 
+DATASET_PIXEL_STATS = {
+    "NUAA-SIRST": {"mean": [110.34], "std": [58.02]},
+    "NUAA_SIRST": {"mean": [110.34], "std": [58.02]},
+    "NUDT-SIRST": {"mean": [107.02], "std": [55.56]},
+    "NUDT_SIRST": {"mean": [107.02], "std": [55.56]},
+    "XD-SIRST": {"mean": [87.35], "std": [59.71]},
+    "XD_SIRST": {"mean": [87.35], "std": [59.71]},
+}
 
+
+def resolve_pixel_stats(train_datasets, valid_datasets):
+    dataset_candidates = list(train_datasets) + list(valid_datasets)
+    for dataset in dataset_candidates:
+        dataset_name = dataset.get("name", "")
+        dataset_path = dataset.get("im_dir", "")
+        for key, stats in DATASET_PIXEL_STATS.items():
+            if key in dataset_name or key in dataset_path:
+                return stats["mean"], stats["std"], key
+
+    return None, None, "sam_default"
 
 
 def get_im_gt_name_dict(datasets, flag='valid'):
@@ -43,7 +58,7 @@ def get_im_gt_name_dict(datasets, flag='valid'):
 
         if datasets[i]["des_dir"] == "":
             print('-des-', datasets[i]["name"], datasets[i]["des_dir"], ': ', 'No description Found')
-            tmp_des_list = [""] * len(tmp_im_list)
+            tmp_des_list = []
         else:
             tmp_des_list = [
                 datasets[i]["des_dir"] + os.sep + x.split(os.sep)[-1].split(datasets[i]["im_ext"])[0] + datasets[i]["des_ext"]
@@ -65,14 +80,12 @@ def get_im_gt_name_dict(datasets, flag='valid'):
 
 
 def valid_collate_fn(batch):
-
     out = {}
 
     out["imidx"] = torch.stack([x["imidx"] for x in batch], dim=0)
     out["image"] = torch.stack([x["image"] for x in batch], dim=0)
     out["label"] = torch.stack([x["label"] for x in batch], dim=0)
     out["shape"] = torch.stack([x["shape"] for x in batch], dim=0)
-
 
     out["caption"] = [x["caption"] for x in batch]
 
@@ -195,7 +208,6 @@ class RandomCrop(object):
 
 
 class Normalize(object):
-
     def __init__(self, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
         self.mean = mean
         self.std = std
@@ -205,8 +217,6 @@ class Normalize(object):
 
 
 class LargeScaleJitter(object):
-
-
     def __init__(self, output_size=1024, aug_scale_min=0.1, aug_scale_max=2.0):
         self.desired_size = torch.tensor(output_size)
         self.aug_scale_min = aug_scale_min
@@ -258,8 +268,6 @@ class LargeScaleJitter(object):
 
 
 class TargetAwareCropResize(object):
-
-
     def __init__(
         self,
         output_size=1024,
@@ -309,13 +317,11 @@ class TargetAwareCropResize(object):
 
         h, w = image.shape[-2:]
 
-
         if random.random() < self.global_view_prob:
             image, label = self._resize_and_pad(image, label)
             return {'imidx': imidx, 'image': image, 'label': label, 'shape': torch.tensor(image.shape[-2:]), 'caption': caption}
 
         pos = torch.nonzero(label[0] > 0, as_tuple=False)
-
 
         if pos.numel() == 0:
             image, label = self._resize_and_pad(image, label)
@@ -328,7 +334,6 @@ class TargetAwareCropResize(object):
 
         box_h = y_max - y_min + 1
         box_w = x_max - x_min + 1
-
 
         target_frac = random.uniform(self.target_frac_min, self.target_frac_max)
         desired_crop = int(round(max(box_h, box_w) / max(target_frac, 1e-6)))
@@ -378,19 +383,17 @@ class TargetAwareCropResize(object):
 
 
 class HybridTinyTargetAug(object):
-
-
     def __init__(
         self,
         output_size=1024,
         aug_scale_min=0.6,
         aug_scale_max=1.6,
-        target_crop_prob=0.35,
-        target_frac_min=0.02,
+        target_crop_prob=0.2,
+        target_frac_min=0.03,
         target_frac_max=0.04,
-        min_crop_size=160,
+        min_crop_size=224,
         tiny_box_side_frac=0.05,
-        tiny_mask_area_frac=0.001,
+        tiny_mask_area_frac=0.0015,
     ):
         self.base_transform = LargeScaleJitter(
             output_size=output_size,
@@ -492,11 +495,8 @@ class OnlineDataset(Dataset):
 
         im = io.imread(im_path)
         gt = io.imread(gt_path)
-        if des_path and os.path.isfile(des_path):
-            with open(des_path, 'r') as cf:
-                caption = cf.read().strip()
-        else:
-            caption = ""
+        with open(des_path, 'r') as cf:
+            caption = cf.read().strip()
         caption = tokenize(caption)
 
         if len(gt.shape) > 2:
