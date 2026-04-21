@@ -1,4 +1,3 @@
-
 import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
@@ -38,7 +37,6 @@ class Sam(nn.Module):
         return self.pixel_mean.device
 
     def _safe_cat_optional(self, values: List[Optional[Tensor]]) -> Optional[Tensor]:
-
         if len(values) == 0:
             return None
         if any(v is None for v in values):
@@ -53,13 +51,10 @@ class Sam(nn.Module):
         input_size: Tuple[int, ...],
         original_size: Tuple[int, ...],
     ) -> Dict[str, Any]:
-
         processed_aux_outputs: Dict[str, Any] = {}
 
         if aux_outputs is not None:
             for key, value in aux_outputs.items():
-
-
                 if (
                     isinstance(value, torch.Tensor)
                     and value.dim() == 4
@@ -79,7 +74,6 @@ class Sam(nn.Module):
         self,
         outputs: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-
         aux_outputs_merged: Dict[str, Any] = {}
 
         if len(outputs) == 0:
@@ -101,10 +95,8 @@ class Sam(nn.Module):
             if not isinstance(first_value, torch.Tensor):
                 continue
 
-
             if first_value.dim() == 0:
                 aux_outputs_merged[key] = torch.stack(values, dim=0)
-
 
             else:
                 aux_outputs_merged[key] = torch.cat(values, dim=0)
@@ -121,7 +113,6 @@ class Sam(nn.Module):
         )
 
         image_embeddings, inter_embeddings = self.image_encoder(input_images)
-
 
         multi_inter_embeddings = [
             feat.permute(0, 3, 1, 2).contiguous() for feat in inter_embeddings
@@ -169,7 +160,7 @@ class Sam(nn.Module):
                 masks=image_record.get("mask_inputs", None),
             )
 
-            low_res_masks, _, aux_outputs = self.mask_decoder(
+            low_res_masks, sam_masks, _, aux_outputs = self.mask_decoder(
                 image_embeddings=curr_embedding.unsqueeze(0),
                 interm_embeddings=curr_inter_embeddings,
                 mask_prompt_256_dense_embeddings=mask_prompt_256_dense_embeddings,
@@ -182,6 +173,8 @@ class Sam(nn.Module):
                 text_tokens=text_tokens,
                 multimask_output=multimask_output,
             )
+
+            aux_outputs["sam_mask"] = sam_masks
 
             if prompt_aux_outputs is not None:
                 aux_outputs.update(prompt_aux_outputs)
@@ -206,9 +199,6 @@ class Sam(nn.Module):
                     "aux_outputs": processed_aux_outputs,
                 }
             )
-
-
-
 
         masks = torch.cat([x["masks"] for x in outputs], dim=0)
 
@@ -267,7 +257,6 @@ class Sam(nn.Module):
             std = std.expand(3, -1, -1)
 
         x = (x - mean) / std
-
 
         if x.shape[0] == 1:
             x = x.repeat(3, 1, 1)
