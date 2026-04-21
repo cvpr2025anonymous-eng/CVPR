@@ -2,8 +2,6 @@ import os
 import math
 import argparse
 import random
-import ast
-import re
 import numpy as np
 
 import torch
@@ -19,27 +17,10 @@ from utils.dataloader import (
     RandomHFlip,
     RandomVFlip,
     Resize,
+    resolve_pixel_stats,
 )
 from utils.loss_mask import final_iou_loss
 import utils.misc as misc
-
-
-
-DATASET_PIXEL_STATS = {
-    "NUAA-SIRST": {"mean": [109.34], "std": [58.02]},
-    "NUAA_SIRST": {"mean": [109.34], "std": [58.02]},
-    "NUDT-SIRST": {"mean": [107.02], "std": [55.56]},
-    "NUDT_SIRST": {"mean": [107.02], "std": [55.56]},
-    "XD-SIRST": {"mean": [87.35], "std": [59.71]},
-    "XD_SIRST": {"mean": [87.35], "std": [59.71]},
-}
-
-DATASET_EVAL_RESOLUTIONS = {
-    "NUAA_SIRST": 1024,
-    "XD_SIRST": 512,
-    "NUDT_SIRST": 256,
-}
-
 
 
 def get_args_parser():
@@ -54,7 +35,6 @@ def get_args_parser():
         "--model-type",
         type=str,
         default="vit_b",
-        help="The type of model to load, in ['vit_h', 'vit_l', 'vit_b']",
     )
     parser.add_argument(
         "--checkpoint",
@@ -64,7 +44,6 @@ def get_args_parser():
     parser.add_argument("--device", type=str, default="cuda")
 
     parser.add_argument("--seed", default=42, type=int)
-
 
     parser.add_argument("--learning_rate", default=1e-4, type=float)
     parser.add_argument("--lr_decoder", default=None, type=float)
@@ -79,16 +58,12 @@ def get_args_parser():
     parser.add_argument("--min_lr", default=1e-6, type=float)
 
     parser.add_argument("--start_epoch", default=1, type=int)
-    parser.add_argument("--max_epoch_num", default=400, type=int)
+    parser.add_argument("--max_epoch_num", default=200, type=int)
     parser.add_argument(
         "--input_size",
-        nargs="+",
-        default=None,
-        help=(
-            "Input image size. Supports forms like: "
-            "`--input_size 1024 1024`, `--input_size 1024,1024`, "
-            "or `--input_size [1024,1024]`."
-        ),
+        nargs=2,
+        type=int,
+        default=[1024, 1024],
     )
 
     parser.add_argument("--batch_size_train", default=8, type=int)
@@ -96,13 +71,11 @@ def get_args_parser():
 
     parser.add_argument("--model_save_fre", default=50, type=int)
 
-
     parser.add_argument("--sam_lora_rank", default=2, type=int)
     parser.add_argument("--sam_lora_alpha", default=4.0, type=float)
     parser.add_argument("--clip_lora_rank", default=2, type=int)
     parser.add_argument("--clip_lora_alpha", default=4.0, type=float)
     parser.add_argument("--clip_lora_dropout", default=0.0, type=float)
-
 
     parser.add_argument("--contrastive_weight", default=0.5, type=float)
     parser.add_argument("--contrastive_lambda", default=0.1, type=float)
@@ -110,79 +83,29 @@ def get_args_parser():
         "--mmd_lambda",
         default=0.05,
         type=float,
-        help="Weight for batch-level MMD alignment between CLIP text/image tokens.",
     )
     parser.add_argument(
         "--contrastive_temperature",
         default=0.07,
         type=float,
-        help="Temperature used by the InfoNCE text-image alignment loss.",
     )
     parser.add_argument(
         "--sam_mask_weight",
         default=0.0,
         type=float,
-        help="Weight for auxiliary supervision on aux_outputs['sam_mask']. Set 0 to disable.",
     )
-
-
-    parser.add_argument("--aug_scale_min", default=0.8, type=float)
-    parser.add_argument("--aug_scale_max", default=1.2, type=float)
-    parser.add_argument("--tiny_target_crop_prob", default=0.3, type=float)
-    parser.add_argument("--tiny_target_crop_min_frac", default=0.02, type=float)
-    parser.add_argument("--tiny_target_crop_max_frac", default=0.05, type=float)
-    parser.add_argument("--tiny_target_min_crop_size", default=224, type=int)
-    parser.add_argument("--tiny_target_max_box_side_frac", default=0.05, type=float)
-    parser.add_argument("--tiny_target_max_mask_area_frac", default=0.0015, type=float)
-
 
     parser.add_argument(
         "--scene_source",
         default="image",
         choices=["image", "background"],
-        help=(
-            "image: use the original image as the scene input to keep train/inference consistent; "
-            "background: use a GT-masked background image for ablation only"
-        ),
     )
-
 
     parser.add_argument("--iou_smooth", default=1e-6, type=float)
     parser.add_argument(
         "--supervision_size",
         default=1024,
         type=int,
-        help="Resolution used for loss supervision (set <=0 to follow label size).",
-    )
-    parser.add_argument(
-        "--eval_iou_sizes",
-        nargs="+",
-        default=[1024, 512, 256],
-        help=(
-            "Resolutions for IoU reporting during evaluation. "
-            "The first value is used by the main mIoU/pixAcc metrics. "
-            "Supports forms like: `--eval_iou_sizes 256 512 1024` "
-            "or `--eval_iou_sizes [256,512,1024]`."
-        ),
-    )
-    parser.add_argument(
-        "--pixel_mean",
-        nargs="+",
-        type=float,
-        default=None,
-        help="Input normalization mean. Use one value for grayscale datasets or three values for RGB.",
-    )
-    parser.add_argument(
-        "--pixel_std",
-        nargs="+",
-        type=float,
-        default=None,
-        help="Input normalization std. Use one value for grayscale datasets or three values for RGB.",
-    )
-    parser.add_argument(
-        "--disable_auto_dataset_stats",
-        action="store_true",
-        help="Use SAM default normalization instead of auto-applying known SIRST grayscale stats.",
     )
 
     parser.add_argument("--world_size", default=1, type=int)
@@ -196,130 +119,7 @@ def get_args_parser():
     parser.add_argument("--eval_interval", default=5, type=int)
 
     args = parser.parse_args()
-    args.input_size = normalize_input_size_arg(args.input_size)
-    args.eval_iou_sizes = normalize_eval_iou_sizes_arg(args.eval_iou_sizes)
     return args
-
-
-def normalize_input_size_arg(value):
-    if value is None:
-        return [1024, 1024]
-
-    if isinstance(value, int):
-        return [int(value), int(value)]
-
-    if isinstance(value, (list, tuple)):
-        if len(value) == 2 and all(str(v).strip().lstrip("-").isdigit() for v in value):
-            return [int(value[0]), int(value[1])]
-        if len(value) == 1:
-            value = value[0]
-        else:
-            value = " ".join(str(v) for v in value)
-
-    text = str(value).strip()
-    if not text:
-        return [1024, 1024]
-
-    if text[0] in "[(" and text[-1] in "])":
-        parsed = ast.literal_eval(text)
-        if isinstance(parsed, (list, tuple)) and len(parsed) == 2:
-            return [int(parsed[0]), int(parsed[1])]
-
-    tokens = [tok for tok in re.split(r"[\s,]+", text.strip("[]()")) if tok]
-    if len(tokens) == 1:
-        side = int(tokens[0])
-        return [side, side]
-    if len(tokens) == 2:
-        return [int(tokens[0]), int(tokens[1])]
-
-    raise ValueError(f"Unsupported --input_size value: {value}")
-
-
-def normalize_eval_iou_sizes_arg(value):
-    if value is None:
-        return [256, 512, 1024]
-
-    if isinstance(value, int):
-        return [int(value)]
-
-    if isinstance(value, (list, tuple)):
-        if len(value) == 1:
-            text = str(value[0]).strip()
-        else:
-            text = " ".join(str(v) for v in value).strip()
-    else:
-        text = str(value).strip()
-
-    if not text:
-        return [256, 512, 1024]
-
-    parsed_sizes = []
-    if text[0] in "[(" and text[-1] in "])":
-        parsed = ast.literal_eval(text)
-        if isinstance(parsed, (list, tuple)):
-            parsed_sizes = [int(v) for v in parsed]
-        else:
-            parsed_sizes = [int(parsed)]
-    else:
-        tokens = [tok for tok in re.split(r"[\s,]+", text.strip("[]()")) if tok]
-        parsed_sizes = [int(tok) for tok in tokens]
-
-    dedup_sizes = []
-    for size in parsed_sizes:
-        if size > 0 and size not in dedup_sizes:
-            dedup_sizes.append(size)
-
-    if not dedup_sizes:
-        raise ValueError(f"Unsupported --eval_iou_sizes value: {value}")
-
-    return dedup_sizes
-
-
-def resolve_pixel_stats(args, train_datasets, valid_datasets):
-    if (args.pixel_mean is None) ^ (args.pixel_std is None):
-        raise ValueError("Please provide both --pixel_mean and --pixel_std together.")
-
-    if args.pixel_mean is not None and args.pixel_std is not None:
-        return args.pixel_mean, args.pixel_std, "custom"
-
-    if args.disable_auto_dataset_stats:
-        return None, None, "sam_default"
-
-    dataset_candidates = list(train_datasets) + list(valid_datasets)
-    for dataset in dataset_candidates:
-        dataset_name = dataset.get("name", "")
-        dataset_path = dataset.get("im_dir", "")
-        for key, stats in DATASET_PIXEL_STATS.items():
-            if key in dataset_name or key in dataset_path:
-                return stats["mean"], stats["std"], key
-
-    return None, None, "sam_default"
-
-
-def get_dataset_metric_key(dataset):
-    dataset_text = " ".join(
-        str(dataset.get(field, ""))
-        for field in ("name", "im_dir", "gt_dir")
-    ).upper().replace("-", "_")
-
-    for key in DATASET_EVAL_RESOLUTIONS:
-        if key in dataset_text:
-            return key
-
-    dataset_name = str(dataset.get("name", "")).strip()
-    if dataset_name:
-        return re.sub(r"[^A-Z0-9]+", "_", dataset_name.upper()).strip("_")
-
-    return "DATASET"
-
-
-def get_dataset_eval_size(dataset, args):
-    dataset_key = get_dataset_metric_key(dataset)
-    if dataset_key in DATASET_EVAL_RESOLUTIONS:
-        return int(DATASET_EVAL_RESOLUTIONS[dataset_key])
-
-    target_sizes = getattr(args, "eval_iou_sizes", None) or [1024]
-    return int(target_sizes[0])
 
 
 def move_caption_to_device(captions, device):
@@ -406,7 +206,6 @@ def compute_alignment_losses(text_tokens, image_tokens, args, device):
 
 
 def unpack_model_outputs(outputs):
-
     pred_masks = outputs
     text_tokens = None
     image_tokens = None
@@ -441,26 +240,11 @@ def unpack_model_outputs(outputs):
     return pred_masks, text_tokens, image_tokens, aux_outputs
 
 
-def count_parameters(model):
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    return trainable_params, total_params
-
-
-def print_trainable_parameters(model):
-    print("===== Trainable Parameters =====")
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            print(name, param.shape)
-    print("================================")
-
-
 def is_lora_parameter_name(name: str) -> bool:
     return "lora_" in name
 
 
 def set_trainable_by_policy(model):
-
     for _, param in model.named_parameters():
         param.requires_grad = False
 
@@ -522,7 +306,6 @@ def resolve_group_lrs(args):
 
 
 def build_optimizer(args, sam):
-
     lr_dict = resolve_group_lrs(args)
 
     prompt_encoder_trainable_prefixes = (
@@ -596,20 +379,10 @@ def build_optimizer(args, sam):
         weight_decay=args.weight_decay,
     )
 
-    print("===== Optimizer Param Groups =====")
-    for group in optimizer.param_groups:
-        print(
-            f"{group['name']}: "
-            f"lr={group['lr']:.8f}, "
-            f"num_tensors={len(group['params'])}"
-        )
-    print("==================================")
-
     return optimizer
 
 
 def get_lr_for_epoch(base_lr, epoch, args):
-
     warmup_epochs = max(int(args.warmup_epochs), 0)
     min_lr = float(args.min_lr)
     max_epoch_num = max(int(args.max_epoch_num), 1)
@@ -643,7 +416,6 @@ def get_optimizer_lr_dict(optimizer):
 
 
 def build_scenes(inputs, labels, scene_source="image"):
-
     if scene_source == "background":
         labels_bin = (labels > 0.5).float()
         return inputs * (1.0 - labels_bin)
@@ -683,8 +455,8 @@ def resize_to_label_size(mask_logits, labels):
     return mask_logits
 
 
-def resize_labels_to_size(labels, target_size):
-    target_size = int(target_size)
+def resize_labels_for_supervision(labels, args):
+    target_size = int(getattr(args, "supervision_size", 0))
     if target_size <= 0:
         return labels
     if labels.shape[-2:] != (target_size, target_size):
@@ -696,22 +468,46 @@ def resize_labels_to_size(labels, target_size):
     return labels
 
 
-def resize_labels_for_supervision(labels, args):
-    target_size = int(getattr(args, "supervision_size", 0))
-    return resize_labels_to_size(labels, target_size)
+DATASET_EVAL_SIZES = {
+    "NUAA-SIRST": 1024,
+    "NUAA_SIRST": 1024,
+    "XD-SIRST": 512,
+    "XD_SIRST": 512,
+    "NUDT-SIRST": 256,
+    "NUDT_SIRST": 256,
+}
 
 
-def resize_labels_for_main_iou(labels, args):
-    target_sizes = getattr(args, "eval_iou_sizes", None) or []
-    if len(target_sizes) > 0:
-        target_size = int(target_sizes[0])
-    else:
-        target_size = int(getattr(args, "supervision_size", 0))
-    return resize_labels_to_size(labels, target_size)
+def resolve_eval_size_from_loader(valid_dataloader, default_size=1024):
+    dataset = getattr(valid_dataloader, "dataset", None)
+    data_names = getattr(dataset, "dataset", {}).get("data_name", []) if dataset is not None else []
+    dataset_name = data_names[0] if data_names else ""
+    for key, size in DATASET_EVAL_SIZES.items():
+        if key in dataset_name:
+            return size
+    return default_size
+
+
+def resize_labels_for_metric(labels, target_size):
+    if target_size <= 0:
+        return labels
+    if labels.shape[-2:] != (target_size, target_size):
+        labels = F.interpolate(
+            labels.float(),
+            size=(target_size, target_size),
+            mode="nearest",
+        )
+    return labels
 
 
 def resize_labels_for_pd_fa(labels, target_size=256):
-    return resize_labels_to_size(labels, target_size)
+    if labels.shape[-2:] != (target_size, target_size):
+        labels = F.interpolate(
+            labels.float(),
+            size=(target_size, target_size),
+            mode="nearest",
+        )
+    return labels
 
 
 def compute_mask_loss(mask_logits, labels, args):
@@ -736,53 +532,13 @@ def compute_sam_aux_loss(aux_outputs, labels, args, device):
     return sam_aux_loss
 
 
-def static_check_mask_stats(tag, mask_logits, labels, pred_threshold=0.5):
-    probs = torch.sigmoid(mask_logits.detach().float())
-    pred_bin = (probs > pred_threshold).float()
-
-    print(
-        f"[Static Check][{tag}] "
-        f"logits min/max=({mask_logits.min().item():.4f}, {mask_logits.max().item():.4f}) "
-        f"thr={pred_threshold:.3f} "
-        f"probs mean={probs.mean().item():.6f} "
-        f"pred_pos_ratio={pred_bin.mean().item():.6f} "
-        f"gt_pos_ratio={labels.float().mean().item():.6f}"
-    )
-
-
-def static_check_gradients(model):
-    interesting = [
-        "mask_decoder",
-        "image_encoder",
-        "prompt_encoder.sr_clip.clip_backbone.transformer",
-    ]
-
-    print("===== Gradient Static Check =====")
-    for name, param in model.named_parameters():
-        if not param.requires_grad:
-            continue
-        if param.grad is None:
-            continue
-        if any(k in name for k in interesting):
-            grad_norm = param.grad.detach().norm().item()
-            print(f"[Grad Check] {name}: grad_norm={grad_norm:.6e}")
-    print("=================================")
-
-
 def main(train_datasets, valid_datasets, args):
     misc.init_distributed_mode(args)
-    print("world size: {}".format(args.world_size))
-    print("rank: {}".format(args.rank))
-    print("local_rank: {}".format(args.local_rank))
-    print("args: " + str(args) + "\n")
 
     seed = args.seed + misc.get_rank()
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
-
-    train_dataset_configs = list(train_datasets)
-    valid_dataset_configs = list(valid_datasets)
 
     if args.input_size[0] != args.input_size[1]:
         raise ValueError(
@@ -794,22 +550,14 @@ def main(train_datasets, valid_datasets, args):
     if not args.eval:
         print("--- create training dataloader ---")
         train_im_gt_list = get_im_gt_name_dict(train_datasets, flag="train")
-        train_dataloaders, train_datasets = create_dataloaders(
+        train_dataloaders, _ = create_dataloaders(
             train_im_gt_list,
             my_transforms=[
                 HybridTinyTargetAug(
                     output_size=train_output_size,
-                    aug_scale_min=args.aug_scale_min,
-                    aug_scale_max=args.aug_scale_max,
-                    target_crop_prob=args.tiny_target_crop_prob,
-                    target_frac_min=args.tiny_target_crop_min_frac,
-                    target_frac_max=args.tiny_target_crop_max_frac,
-                    min_crop_size=args.tiny_target_min_crop_size,
-                    tiny_box_side_frac=args.tiny_target_max_box_side_frac,
-                    tiny_mask_area_frac=args.tiny_target_max_mask_area_frac,
                 ),
-                RandomHFlip(prob=0.5),
-                RandomVFlip(prob=0.5),
+                RandomHFlip(prob=0.25),
+                RandomVFlip(prob=0.25),
             ],
             batch_size=args.batch_size_train,
             training=True,
@@ -818,7 +566,7 @@ def main(train_datasets, valid_datasets, args):
 
     print("--- create valid dataloader ---")
     valid_im_gt_list = get_im_gt_name_dict(valid_datasets, flag="valid")
-    valid_dataloaders, valid_datasets = create_dataloaders(
+    valid_dataloaders, _ = create_dataloaders(
         valid_im_gt_list,
         my_transforms=[Resize(args.input_size)],
         batch_size=args.batch_size_valid,
@@ -826,49 +574,9 @@ def main(train_datasets, valid_datasets, args):
     )
     print(len(valid_dataloaders), " valid dataloaders created")
 
-    pixel_mean, pixel_std, stats_source = resolve_pixel_stats(
-        args,
-        train_datasets=train_dataset_configs,
-        valid_datasets=valid_dataset_configs,
-    )
-
-    if pixel_mean is None or pixel_std is None:
-        print("Using SAM default pixel statistics.")
-    else:
-        print(
-            f"Using pixel statistics from {stats_source}: "
-            f"mean={pixel_mean}, std={pixel_std}"
-        )
-        print(
-            "Grayscale images will be normalized with these stats and then "
-            "replicated to 3 channels for SAM/CLIP compatibility."
-        )
-
-    if args.scene_source == "background":
-        print(
-            "Scene source: background (GT-masked). "
-            "This is intended for controlled ablations and requires GT labels "
-            "to build the background branch input."
-        )
-    else:
-        print(
-            "Scene source: image. "
-            "Training/validation will use the full image for the scene branch "
-            "to stay aligned with real inference."
-        )
-
-    if args.supervision_size > 0:
-        print(f"Loss supervision size: {args.supervision_size}x{args.supervision_size}")
-    else:
-        print("Loss supervision size follows label resolution.")
-
-    print(f"Training input size: {args.input_size[0]}x{args.input_size[1]}")
-    print(
-        "Dataset eval sizes:",
-        {
-            get_dataset_metric_key(dataset): get_dataset_eval_size(dataset, args)
-            for dataset in valid_dataset_configs
-        },
+    pixel_mean, pixel_std, _ = resolve_pixel_stats(
+        train_datasets=train_datasets,
+        valid_datasets=valid_datasets,
     )
 
     sam = sam_model_registry[args.model_type](
@@ -894,15 +602,10 @@ def main(train_datasets, valid_datasets, args):
     set_trainable_by_policy(sam)
     sam.to(device=args.device)
 
-    trainable_params, total_params = count_parameters(sam)
-    print(f"Total trainable parameters: {trainable_params}")
-    print(f"Total parameters (including non-trainable): {total_params}")
-    print_trainable_parameters(sam)
-
     if not args.eval:
         print("--- define optimizer ---")
         optimizer = build_optimizer(args, sam)
-        train(args, sam, optimizer, train_dataloaders, valid_dataloaders, valid_dataset_configs)
+        train(args, sam, optimizer, train_dataloaders, valid_dataloaders)
     else:
         if args.restore_model:
             print("restore model from:", args.restore_model)
@@ -912,10 +615,10 @@ def main(train_datasets, valid_datasets, args):
                     map_location=args.device,
                 )
             )
-        evaluate(args, sam, valid_dataloaders, valid_dataset_configs, epoch=args.start_epoch)
+        evaluate(args, sam, valid_dataloaders, epoch=args.start_epoch)
 
 
-def train(args, sam, optimizer, train_dataloaders, valid_dataloaders, valid_dataset_configs):
+def train(args, sam, optimizer, train_dataloaders, valid_dataloaders):
     if misc.is_main_process():
         os.makedirs(args.output, exist_ok=True)
 
@@ -936,9 +639,9 @@ def train(args, sam, optimizer, train_dataloaders, valid_dataloaders, valid_data
         )
 
         metric_logger = misc.MetricLogger(delimiter="  ")
-        current_contrastive_weight = args.contrastive_weight
+        current_contrastive_weight = args.contrastive_weight if epoch < 50 else 0.0
 
-        for step, data in enumerate(metric_logger.log_every(train_dataloaders, 1000)):
+        for data in train_dataloaders:
             inputs, labels, captions = data["image"], data["label"], data["caption"]
 
             inputs = inputs.to(args.device, non_blocking=True)
@@ -970,9 +673,6 @@ def train(args, sam, optimizer, train_dataloaders, valid_dataloaders, valid_data
                 args,
             )
 
-            if epoch == epoch_start and step < 3:
-                static_check_mask_stats("final", final_masks.detach(), labels_sup)
-
             sam_aux_loss = compute_sam_aux_loss(
                 aux_outputs=aux_outputs,
                 labels=labels_sup,
@@ -993,9 +693,6 @@ def train(args, sam, optimizer, train_dataloaders, valid_dataloaders, valid_data
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
 
-            if epoch == epoch_start and step == 0:
-                static_check_gradients(sam)
-
             torch.nn.utils.clip_grad_norm_(
                 filter(lambda p: p.requires_grad, sam.parameters()),
                 max_norm=1.0,
@@ -1003,26 +700,12 @@ def train(args, sam, optimizer, train_dataloaders, valid_dataloaders, valid_data
 
             optimizer.step()
 
-            with torch.no_grad():
-                final_probs = torch.sigmoid(final_masks.detach())
-                final_pred_bin = (final_probs > 0.5).float()
-                pred_pos_ratio = final_pred_bin.mean().item()
-                gt_pos_ratio = labels_sup.mean().item()
-
-                aux_scalar_metrics = {}
-                for key, value in aux_outputs.items():
-                    if key.endswith("_mean") and torch.is_tensor(value):
-                        aux_scalar_metrics[key] = value.detach().float().mean().item()
-
             metric_update = dict(
                 loss=loss.item(),
                 final_loss=final_loss.item(),
                 mask_loss=mask_loss.item(),
                 sam_aux_loss=sam_aux_loss.item(),
                 contrast_loss=contrast_loss.item(),
-                pred_pos_ratio=pred_pos_ratio,
-                gt_pos_ratio=gt_pos_ratio,
-                **aux_scalar_metrics,
             )
             metric_logger.update(**metric_update)
 
@@ -1042,7 +725,7 @@ def train(args, sam, optimizer, train_dataloaders, valid_dataloaders, valid_data
                 f.write("\n")
 
         if epoch == epoch_start or epoch % args.eval_interval == 0:
-            test_stats = evaluate(args, sam, valid_dataloaders, valid_dataset_configs, epoch=epoch)
+            test_stats = evaluate(args, sam, valid_dataloaders, epoch=epoch)
 
             train_stats = {
                 k: meter.global_avg
@@ -1075,35 +758,32 @@ def train(args, sam, optimizer, train_dataloaders, valid_dataloaders, valid_data
 
 
 @torch.no_grad()
-def evaluate(args, sam, valid_dataloaders, valid_dataset_configs, epoch=0):
+def evaluate(args, sam, valid_dataloaders, epoch=0):
     sam.eval()
-    current_contrastive_weight = args.contrastive_weight
+    metric_logger = misc.MetricLogger(delimiter="  ")
+    current_contrastive_weight = args.contrastive_weight if epoch < 50 else 0.0
 
     iou_thresholds = [i / 10.0 for i in range(1, 11)]
-    scalar_metric_pool = {}
-    test_stats = {}
+
+    final_miou_metric = misc.mIoU(nclass=1, threshold=0.5, from_logits=True)
+    
+    final_miou_metrics_by_threshold = {
+        threshold: misc.mIoU(nclass=1, threshold=threshold, from_logits=True)
+        for threshold in iou_thresholds
+    }
+
+    pd_fa_metric = misc.PD_FA(
+        nclass=1,
+        bins=10,
+        match_distance=3,
+        from_logits=True,
+    )
 
     print("Validating...")
-    for valid_dataset, valid_dataloader in zip(valid_dataset_configs, valid_dataloaders):
-        dataset_key = get_dataset_metric_key(valid_dataset)
-        eval_size = get_dataset_eval_size(valid_dataset, args)
-        metric_logger = misc.MetricLogger(delimiter="  ")
-        final_miou_metric = misc.mIoU(nclass=1, threshold=0.5, from_logits=True)
-        final_miou_metrics_by_threshold = {
-            threshold: misc.mIoU(nclass=1, threshold=threshold, from_logits=True)
-            for threshold in iou_thresholds
-        }
-        pd_fa_metric = misc.PD_FA(
-            nclass=1,
-            bins=10,
-            match_distance=3,
-            from_logits=True,
-        )
+    for valid_dataloader in valid_dataloaders:
+        metric_size = resolve_eval_size_from_loader(valid_dataloader, default_size=1024)
 
-        print(f"valid_dataloader {dataset_key} len:", len(valid_dataloader))
-        print(f"{dataset_key} eval size: {eval_size}x{eval_size}")
-
-        for step, data_val in enumerate(metric_logger.log_every(valid_dataloader, 1000)):
+        for data_val in valid_dataloader:
             inputs_val = data_val["image"]
             labels_val = data_val["label"]
             captions_val = data_val["caption"]
@@ -1116,8 +796,8 @@ def evaluate(args, sam, valid_dataloaders, valid_dataset_configs, epoch=0):
                 labels_val = labels_val.unsqueeze(1)
             labels_val = (labels_val > 0).float()
             labels_val_sup = resize_labels_for_supervision(labels_val, args)
-            labels_val_metric = resize_labels_to_size(labels_val, eval_size)
-            labels_val_pd_fa = resize_labels_to_size(labels_val, eval_size)
+            labels_val_metric = resize_labels_for_metric(labels_val, metric_size)
+            labels_val_pd_fa = resize_labels_for_pd_fa(labels_val, target_size=256)
 
             batched_input_val = prepare_batched_input(
                 inputs_val,
@@ -1131,7 +811,6 @@ def evaluate(args, sam, valid_dataloaders, valid_dataset_configs, epoch=0):
                 multimask_output=False,
             )
             pred_masks, text_tokens, image_tokens, aux_outputs = unpack_model_outputs(outputs)
-
 
             tta_preds = [pred_masks]
             for flip_dims in ([3], [2]):
@@ -1161,10 +840,8 @@ def evaluate(args, sam, valid_dataloaders, valid_dataset_configs, epoch=0):
             )
 
             final_masks_metric = resize_to_label_size(final_masks, labels_val_metric)
-            final_masks_pd_fa = resize_to_label_size(final_masks, labels_val_pd_fa)
 
-            if (epoch == args.start_epoch or epoch % args.eval_interval == 0) and step == 0:
-                static_check_mask_stats(f"val_final_{dataset_key}", final_masks_metric, labels_val_metric)
+            final_masks_pd_fa = resize_to_label_size(final_masks, labels_val_pd_fa)
 
             _, _, val_contrast_loss = compute_alignment_losses(
                 text_tokens=text_tokens,
@@ -1185,19 +862,11 @@ def evaluate(args, sam, valid_dataloaders, valid_dataset_configs, epoch=0):
                 + current_contrastive_weight * val_contrast_loss
             )
 
-            with torch.no_grad():
-                final_probs = torch.sigmoid(final_masks_metric.detach())
-                final_pred_bin = (final_probs > 0.5).float()
-                val_pred_pos_ratio = final_pred_bin.mean().item()
-                val_gt_pos_ratio = labels_val_metric.mean().item()
-
             metric_update = dict(
                 val_loss=val_loss.item(),
                 val_final_loss=final_loss.item(),
                 val_sam_aux_loss=val_sam_aux_loss.item(),
                 val_contrast_loss=val_contrast_loss.item(),
-                val_pred_pos_ratio=val_pred_pos_ratio,
-                val_gt_pos_ratio=val_gt_pos_ratio,
             )
             metric_logger.update(**metric_update)
 
@@ -1206,75 +875,44 @@ def evaluate(args, sam, valid_dataloaders, valid_dataset_configs, epoch=0):
                 threshold_metric.update(final_masks_metric, labels_val_metric)
             pd_fa_metric.update(final_masks_pd_fa, labels_val_pd_fa)
 
-        metric_logger.synchronize_between_processes()
+    metric_logger.synchronize_between_processes()
 
-        final_fa, final_pd = pd_fa_metric.get()
-        pixAcc, miou = final_miou_metric.get()
+    final_fa, final_pd = pd_fa_metric.get()
 
-        dataset_stats = {
-            k: meter.global_avg
-            for k, meter in metric_logger.meters.items()
-            if meter.count > 0
-        }
-        dataset_stats["pixAcc@0.5"] = float(pixAcc)
-        dataset_stats["mIoU@0.5"] = float(miou)
-        dataset_stats["eval_size"] = int(eval_size)
+    pixAcc, miou = final_miou_metric.get()
 
-        iou_curve = {}
-        for threshold in iou_thresholds:
-            _, threshold_miou = final_miou_metrics_by_threshold[threshold].get()
-            metric_name = f"mIoU@{threshold:.1f}"
-            iou_curve[metric_name] = float(threshold_miou)
-            dataset_stats[metric_name] = float(threshold_miou)
+    test_stats = {
+        k: meter.global_avg
+        for k, meter in metric_logger.meters.items()
+        if meter.count > 0
+    }
 
-        for metric_name, metric_value in dataset_stats.items():
-            test_stats[f"{dataset_key}_{metric_name}"] = metric_value
-            if isinstance(metric_value, (int, float, np.floating)):
-                scalar_metric_pool.setdefault(metric_name, []).append(float(metric_value))
+    test_stats["pixAcc@0.5"] = float(pixAcc)
+    test_stats["mIoU@0.5"] = float(miou)
 
-        test_stats[f"{dataset_key}_PD_curve"] = [float(v) for v in final_pd]
-        test_stats[f"{dataset_key}_FA_curve"] = [float(v) for v in final_fa]
+    iou_curve = {}
+    for threshold in iou_thresholds:
+        _, threshold_miou = final_miou_metrics_by_threshold[threshold].get()
+        metric_name = f"mIoU@{threshold:.1f}"
+        iou_curve[metric_name] = float(threshold_miou)
+        test_stats[metric_name] = float(threshold_miou)
 
-        print(f"{dataset_key} pixAcc@0.5:", round(float(pixAcc), 6))
-        print(f"{dataset_key} mIoU@0.5:", round(float(miou), 6))
-        print(f"{dataset_key} IoU threshold sweep:", {k: round(v, 6) for k, v in iou_curve.items()})
-        print(f"{dataset_key} PD curve:", np.round(final_pd, 6))
-        print(f"{dataset_key} FA curve:", np.round(final_fa, 6))
-
-    for metric_name, metric_values in scalar_metric_pool.items():
-        if len(metric_values) > 0:
-            test_stats[metric_name] = float(np.mean(metric_values))
-
+    print("pixAcc@0.5:", round(float(pixAcc), 6))
+    print("mIoU@0.5:", round(float(miou), 6))
+    print("IoU threshold sweep:", {k: round(v, 6) for k, v in iou_curve.items()})
+    print("PD curve:", np.round(final_pd, 6))
+    print("FA curve:", np.round(final_fa, 6))
     print("Averaged stats:", test_stats)
 
     return test_stats
 
 
 if __name__ == "__main__":
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-
-    def resolve_dataset_root(*relative_candidates):
-        for relative_candidate in relative_candidates:
-            dataset_root = os.path.join(script_dir, relative_candidate)
-            if os.path.isdir(dataset_root):
-                return dataset_root
-        return os.path.join(script_dir, relative_candidates[0])
-
-    def dataset_available(dataset):
-        return (
-            os.path.isdir(dataset["im_dir"])
-            and os.path.isdir(dataset["gt_dir"])
-        )
-
-    nuaa_root = resolve_dataset_root("data/NUAA-SIRST", "data/NUAA_SIRST")
-    nudt_root = resolve_dataset_root("data/NUDT_SIRST", "data/NUDT-SIRST")
-    xd_root = resolve_dataset_root("data/XD-SIRST", "data/XD_SIRST")
-
     Train_NUAA_SIRST = {
         "name": "Train_NUAA_SIRST",
-        "im_dir": os.path.join(nuaa_root, "train", "images"),
-        "gt_dir": os.path.join(nuaa_root, "train", "masks"),
-        "des_dir": os.path.join(nuaa_root, "train", "descriptions"),
+        "im_dir": "./data/NUAA-SIRST/train/images",
+        "gt_dir": "./data/NUAA-SIRST/train/masks",
+        "des_dir": "./data/NUAA-SIRST/train/descriptions",
         "im_ext": ".jpg",
         "gt_ext": "_pixels0.png",
         "des_ext": "_description.txt",
@@ -1282,9 +920,9 @@ if __name__ == "__main__":
 
     Test_NUAA_SIRST = {
         "name": "Test_NUAA_SIRST",
-        "im_dir": os.path.join(nuaa_root, "test", "images"),
-        "gt_dir": os.path.join(nuaa_root, "test", "masks"),
-        "des_dir": os.path.join(nuaa_root, "test", "descriptions"),
+        "im_dir": "./data/NUAA-SIRST/test/images",
+        "gt_dir": "./data/NUAA-SIRST/test/masks",
+        "des_dir": "./data/NUAA-SIRST/test/descriptions",
         "im_ext": ".jpg",
         "gt_ext": "_pixels0.png",
         "des_ext": "_description.txt",
@@ -1292,9 +930,9 @@ if __name__ == "__main__":
 
     Train_NUDT_SIRST = {
         "name": "Train_NUDT_SIRST",
-        "im_dir": os.path.join(nudt_root, "train", "images"),
-        "gt_dir": os.path.join(nudt_root, "train", "masks"),
-        "des_dir": os.path.join(nudt_root, "train", "descriptions") if os.path.isdir(os.path.join(nudt_root, "train", "descriptions")) else "",
+        "im_dir": "./data/NUDT-SIRST/train/images",
+        "gt_dir": "./data/NUDT-SIRST/train/masks",
+        "des_dir": "./data/NUDT-SIRST/train/descriptions",
         "im_ext": ".jpg",
         "gt_ext": ".png",
         "des_ext": "_description.txt",
@@ -1302,9 +940,9 @@ if __name__ == "__main__":
 
     Test_NUDT_SIRST = {
         "name": "Test_NUDT_SIRST",
-        "im_dir": os.path.join(nudt_root, "test", "images"),
-        "gt_dir": os.path.join(nudt_root, "test", "masks"),
-        "des_dir": os.path.join(nudt_root, "test", "descriptions") if os.path.isdir(os.path.join(nudt_root, "test", "descriptions")) else "",
+        "im_dir": "./data/NUDT-SIRST/test/images",
+        "gt_dir": "./data/NUDT-SIRST/test/masks",
+        "des_dir": "./data/NUDT-SIRST/test/descriptions",
         "im_ext": ".jpg",
         "gt_ext": ".png",
         "des_ext": "_description.txt",
@@ -1312,9 +950,9 @@ if __name__ == "__main__":
 
     Train_XD_SIRST = {
         "name": "Train_XD_SIRST",
-        "im_dir": os.path.join(xd_root, "train", "images"),
-        "gt_dir": os.path.join(xd_root, "train", "masks"),
-        "des_dir": os.path.join(xd_root, "train", "descriptions"),
+        "im_dir": "./data/XD-SIRST/train/images",
+        "gt_dir": "./data/XD-SIRST/train/masks",
+        "des_dir": "./data/XD-SIRST/train/descriptions",
         "im_ext": ".png",
         "gt_ext": ".png",
         "des_ext": "_description.txt",
@@ -1322,27 +960,16 @@ if __name__ == "__main__":
 
     Test_XD_SIRST = {
         "name": "Test_XD_SIRST",
-        "im_dir": os.path.join(xd_root, "test", "images"),
-        "gt_dir": os.path.join(xd_root, "test", "masks"),
-        "des_dir": os.path.join(xd_root, "test", "descriptions"),
+        "im_dir": "./data/XD-SIRST/test/images",
+        "gt_dir": "./data/XD-SIRST/test/masks",
+        "des_dir": "./data/XD-SIRST/test/descriptions",
         "im_ext": ".png",
         "gt_ext": ".png",
         "des_ext": "_description.txt",
     }
 
-    train_datasets = [
-        dataset
-        for dataset in [Train_NUAA_SIRST, Train_XD_SIRST, Train_NUDT_SIRST]
-        if dataset_available(dataset)
-    ]
-    valid_datasets = [
-        dataset
-        for dataset in [Test_NUAA_SIRST, Test_XD_SIRST, Test_NUDT_SIRST]
-        if dataset_available(dataset)
-    ]
-
-    if len(train_datasets) == 0 or len(valid_datasets) == 0:
-        raise FileNotFoundError("No available train/valid datasets were found under train_saist/data.")
+    train_datasets = [Train_NUAA_SIRST]
+    valid_datasets = [Test_NUAA_SIRST]
 
     args = get_args_parser()
     main(train_datasets, valid_datasets, args)
