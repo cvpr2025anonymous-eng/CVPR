@@ -8,8 +8,6 @@ from .common import LayerNorm2d
 
 
 class MultiLevelSceneAdapter(nn.Module):
-
-
     def __init__(self, vit_dim=768, transformer_dim=256, inter_num_levels=4):
         super().__init__()
         if isinstance(vit_dim, (list, tuple)):
@@ -44,7 +42,6 @@ class MultiLevelSceneAdapter(nn.Module):
                 for in_dim in self.level_input_dims
             ]
         )
-
         self.level_score = nn.Sequential(
             nn.Linear(transformer_dim * 2, gate_hidden_dim, bias=False),
             nn.GELU(),
@@ -116,8 +113,6 @@ class MultiLevelSceneAdapter(nn.Module):
 
 
 class UpscaleTo256Block(nn.Module):
-
-
     def __init__(
         self,
         in_chans: int,
@@ -146,8 +141,6 @@ class UpscaleTo256Block(nn.Module):
 
 
 class FeatureFuseBlock(nn.Module):
-
-
     def __init__(
         self,
         skip_chans: int,
@@ -224,10 +217,7 @@ class FeatureFuseBlock(nn.Module):
         return self.out_refine(fused + x)
 
 
-
 class MaskDecoder(nn.Module):
-
-
     def __init__(
         self,
         *,
@@ -411,7 +401,6 @@ class MaskDecoder(nn.Module):
 
         self.log_beta = nn.Parameter(torch.zeros(1))
 
-
     def forward(
         self,
         image_embeddings: torch.Tensor,
@@ -428,7 +417,7 @@ class MaskDecoder(nn.Module):
     ):
         del multimask_output
 
-        final_mask, iou_pred, aux_outputs = self.predict_masks(
+        final_mask, sam_mask, iou_pred, aux_outputs = self.predict_masks(
             image_embeddings=image_embeddings,
             interm_embeddings=interm_embeddings,
             mask_prompt_256_dense_embeddings=mask_prompt_256_dense_embeddings,
@@ -441,7 +430,7 @@ class MaskDecoder(nn.Module):
             text_tokens=text_tokens,
         )
 
-        return final_mask, iou_pred[:, :1], aux_outputs
+        return final_mask, sam_mask, iou_pred[:, :1], aux_outputs
 
     def predict_masks(
         self,
@@ -514,7 +503,7 @@ class MaskDecoder(nn.Module):
             sam_decode_features * inverse_transmission
             - background_features * (inverse_transmission - 1.0)
         )
-
+        
         mask_feature_256 = self.mask_feature_refine(
             torch.cat([recovered_foreground, sam_decode_features], dim=1)
         )
@@ -556,7 +545,7 @@ class MaskDecoder(nn.Module):
             "mask_feature_1024_mean": mask_feature_1024.abs().mean(dim=(1, 2, 3)),
             "scene_level_weights": scene_level_weights,
         }
-        return final_mask, iou_pred, aux_outputs
+        return final_mask, sam_mask, iou_pred, aux_outputs
 
 
 class MLP(nn.Module):
