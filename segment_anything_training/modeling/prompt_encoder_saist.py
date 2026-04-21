@@ -1,7 +1,3 @@
-
-
-
-
 import os
 import numpy as np
 import torch
@@ -25,11 +21,9 @@ class MaskPromptFeatureBlock(nn.Module):
         out_chans: int,
         stride: int = 1,
         use_layernorm: bool = True,
-        use_spatial_attention: bool = False,
         activation: Type[nn.Module] = nn.GELU,
     ) -> None:
         super().__init__()
-        self.use_spatial_attention = use_spatial_attention
         self.conv1 = nn.Conv2d(
             in_chans,
             out_chans,
@@ -58,8 +52,6 @@ class MaskPromptFeatureBlock(nn.Module):
         )
         self.norm3 = LayerNorm2d(out_chans) if use_layernorm else nn.Identity()
         self.act = activation()
-        if use_spatial_attention:
-            self.spatial_att = nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=True)
         if stride != 1 or in_chans != out_chans:
             self.downsample = nn.Sequential(
                 nn.Conv2d(in_chans, out_chans, kernel_size=1, stride=stride, bias=False),
@@ -72,15 +64,6 @@ class MaskPromptFeatureBlock(nn.Module):
         x = self.act(self.norm1(self.conv1(x)))
         x = self.act(self.norm2(self.conv2(x)))
         x = self.norm3(self.conv3(x))
-        if self.use_spatial_attention:
-            attn_input = torch.cat(
-                [
-                    x.mean(dim=1, keepdim=True),
-                    x.amax(dim=1, keepdim=True),
-                ],
-                dim=1,
-            )
-            x = x * torch.sigmoid(self.spatial_att(attn_input))
         return self.act(x + identity)
 
 class PromptEncoder(nn.Module):
@@ -94,16 +77,12 @@ class PromptEncoder(nn.Module):
         sr_clip_ckpt_path: str = "../../ViT-B-32.pt",
         sr_clip_image_size: int = 224,
     ) -> None:
-
         super().__init__()
 
         self.embed_dim = embed_dim
         self.input_image_size = input_image_size
         self.image_embedding_size = image_embedding_size
         self.sr_clip_image_size = sr_clip_image_size
-
-
-
 
         self.pe_layer = PositionEmbeddingRandom(embed_dim // 2)
 
@@ -129,7 +108,6 @@ class PromptEncoder(nn.Module):
 
         self.no_mask_embed = nn.Embedding(1, embed_dim)
 
-
         self.mask_prompt_stem = nn.Sequential(
             MaskPromptFeatureBlock(3, 16, stride=1, use_layernorm=False, activation=activation),
             MaskPromptFeatureBlock(16, 16, stride=1, use_layernorm=False, activation=activation),
@@ -139,7 +117,6 @@ class PromptEncoder(nn.Module):
             16,
             stride=1,
             use_layernorm=True,
-            use_spatial_attention=False,
             activation=activation,
         )
         self.mask_prompt_level1 = MaskPromptFeatureBlock(
@@ -147,7 +124,6 @@ class PromptEncoder(nn.Module):
             32,
             stride=2,
             use_layernorm=True,
-            use_spatial_attention=False,
             activation=activation,
         )
         self.mask_prompt_level2 = MaskPromptFeatureBlock(
@@ -155,20 +131,14 @@ class PromptEncoder(nn.Module):
             64,
             stride=2,
             use_layernorm=True,
-            use_spatial_attention=True,
             activation=activation,
         )
-
-
-
 
         ckpt_path = sr_clip_ckpt_path
         if not os.path.isabs(ckpt_path):
             ckpt_path = os.path.join(os.path.dirname(__file__), ckpt_path)
         state_dict = torch.jit.load(ckpt_path, map_location="cpu").state_dict()
         clip_backbone = build_clip_backbone(state_dict)
-
-
 
         self.sr_clip = SRCLIP(
             clip_backbone=clip_backbone,
@@ -177,7 +147,6 @@ class PromptEncoder(nn.Module):
         )
 
     def get_dense_pe(self) -> torch.Tensor:
-
         return self.pe_layer(self.image_embedding_size).unsqueeze(0)
 
     def _embed_points(
@@ -186,7 +155,6 @@ class PromptEncoder(nn.Module):
         labels: torch.Tensor,
         pad: bool,
     ) -> torch.Tensor:
-
         points = points + 0.5
 
         if pad:
@@ -203,7 +171,6 @@ class PromptEncoder(nn.Module):
         return point_embedding
 
     def _embed_boxes(self, boxes: torch.Tensor) -> torch.Tensor:
-
         boxes = boxes + 0.5
         coords = boxes.reshape(-1, 2, 2)
         corner_embedding = self.pe_layer.forward_with_coords(coords, self.input_image_size)
@@ -212,14 +179,12 @@ class PromptEncoder(nn.Module):
         return corner_embedding
 
     def _embed_mask_inputs(self, masks: torch.Tensor) -> torch.Tensor:
-
         return self.mask_downscaling(masks)
 
     def _build_mask_prompt_dense_embeddings(
         self,
         prompt_image: torch.Tensor,
     ) -> Tuple[Tensor, Tensor, Tensor]:
-
         mask_prompt_1024_dense_embeddings = self.mask_prompt_level0(
             self.mask_prompt_stem(prompt_image)
         )
@@ -243,7 +208,6 @@ class PromptEncoder(nn.Module):
         masks: Optional[torch.Tensor],
         scenes: Optional[torch.Tensor] = None,
     ) -> int:
-
         if points is not None:
             return points[0].shape[0]
         elif boxes is not None:
@@ -259,7 +223,6 @@ class PromptEncoder(nn.Module):
         return self.point_embeddings[0].weight.device
 
     def _prepare_scene_image(self, scenes: torch.Tensor) -> torch.Tensor:
-
         if scenes is None:
             raise ValueError("scenes must not be None when using SR-CLIP PromptEncoder.")
 
@@ -267,7 +230,6 @@ class PromptEncoder(nn.Module):
             raise TypeError(f"scenes must be a torch.Tensor, got {type(scenes)}")
 
         if scenes.dim() == 3:
-
             scenes = scenes.unsqueeze(0)
         elif scenes.dim() == 4:
             pass
@@ -287,7 +249,6 @@ class PromptEncoder(nn.Module):
         return scenes
 
     def _prepare_captions(self, captions: torch.Tensor, device: torch.device) -> torch.Tensor:
-
         if captions is None:
             raise ValueError("captions must not be None when using SR-CLIP PromptEncoder.")
 
@@ -355,7 +316,6 @@ class PromptEncoder(nn.Module):
         Optional[Tensor],
         Optional[Tensor],
     ]:
-
         device = self._get_device()
         self.sr_clip.to(device)
 
@@ -366,9 +326,6 @@ class PromptEncoder(nn.Module):
             mask_prompt_1024_dense_embeddings,
         ) = self._build_mask_prompt_dense_embeddings(prompt_image)
 
-
-
-
         scene_images = self._prepare_scene_image(scenes).to(device)
         caption_tokens = self._prepare_captions(captions, device)
 
@@ -378,9 +335,6 @@ class PromptEncoder(nn.Module):
         image_token = srclip_outputs["image_token"]
 
         prompt_aux: Dict[str, torch.Tensor] = {}
-
-
-
 
         bs = self._get_batch_size(points, boxes, masks, scenes)
         dense_embeddings = self.no_mask_embed.weight.reshape(1, -1, 1, 1).expand(
@@ -411,11 +365,6 @@ class PromptEncoder(nn.Module):
             masks = masks.to(device)
             dense_embeddings = self._embed_mask_inputs(masks)
 
-
-
-
-
-
         if text_token.shape[0] != bs:
             if text_token.shape[0] == 1:
                 text_token = text_token.expand(bs, -1)
@@ -445,8 +394,6 @@ class PromptEncoder(nn.Module):
 
 
 class PositionEmbeddingRandom(nn.Module):
-
-
     def __init__(self, num_pos_feats: int = 64, scale: Optional[float] = None) -> None:
         super().__init__()
         if scale is None or scale <= 0.0:
@@ -458,14 +405,12 @@ class PositionEmbeddingRandom(nn.Module):
         )
 
     def _pe_encoding(self, coords: torch.Tensor) -> torch.Tensor:
-
         coords = 2 * coords - 1
         coords = coords @ self.positional_encoding_gaussian_matrix
         coords = 2 * np.pi * coords
         return torch.cat([torch.sin(coords), torch.cos(coords)], dim=-1)
 
     def forward(self, size: Tuple[int, int]) -> torch.Tensor:
-
         h, w = size
         device: Any = self.positional_encoding_gaussian_matrix.device
 
@@ -484,7 +429,6 @@ class PositionEmbeddingRandom(nn.Module):
         coords_input: torch.Tensor,
         image_size: Tuple[int, int],
     ) -> torch.Tensor:
-
         coords = coords_input.clone()
         coords[:, :, 0] = coords[:, :, 0] / image_size[1]
         coords[:, :, 1] = coords[:, :, 1] / image_size[0]
