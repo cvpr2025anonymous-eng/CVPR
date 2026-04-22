@@ -6,7 +6,6 @@ from copy import deepcopy
 
 from .common import LayerNorm2d
 
-
 class MultiLevelSceneAdapter(nn.Module):
     def __init__(self, vit_dim=768, transformer_dim=256, inter_num_levels=4):
         super().__init__()
