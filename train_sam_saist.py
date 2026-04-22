@@ -500,16 +500,6 @@ def resize_labels_for_metric(labels, target_size):
     return labels
 
 
-def resize_labels_for_pd_fa(labels, target_size=256):
-    if labels.shape[-2:] != (target_size, target_size):
-        labels = F.interpolate(
-            labels.float(),
-            size=(target_size, target_size),
-            mode="nearest",
-        )
-    return labels
-
-
 def compute_mask_loss(mask_logits, labels, args):
     mask_logits = resize_to_label_size(mask_logits, labels)
     loss_dict = final_iou_loss(
@@ -766,7 +756,7 @@ def evaluate(args, sam, valid_dataloaders, epoch=0):
     iou_thresholds = [i / 10.0 for i in range(1, 11)]
 
     final_miou_metric = misc.mIoU(nclass=1, threshold=0.5, from_logits=True)
-    
+
     final_miou_metrics_by_threshold = {
         threshold: misc.mIoU(nclass=1, threshold=threshold, from_logits=True)
         for threshold in iou_thresholds
@@ -796,8 +786,6 @@ def evaluate(args, sam, valid_dataloaders, epoch=0):
                 labels_val = labels_val.unsqueeze(1)
             labels_val = (labels_val > 0).float()
             labels_val_sup = resize_labels_for_supervision(labels_val, args)
-            labels_val_metric = resize_labels_for_metric(labels_val, metric_size)
-            labels_val_pd_fa = resize_labels_for_pd_fa(labels_val, target_size=256)
 
             batched_input_val = prepare_batched_input(
                 inputs_val,
@@ -839,9 +827,11 @@ def evaluate(args, sam, valid_dataloaders, epoch=0):
                 args,
             )
 
+            labels_val_metric = resize_labels_for_metric(labels_val, metric_size)
             final_masks_metric = resize_to_label_size(final_masks, labels_val_metric)
 
-            final_masks_pd_fa = resize_to_label_size(final_masks, labels_val_pd_fa)
+            labels_val_pd_fa = labels_val_metric
+            final_masks_pd_fa = final_masks_metric
 
             _, _, val_contrast_loss = compute_alignment_losses(
                 text_tokens=text_tokens,
