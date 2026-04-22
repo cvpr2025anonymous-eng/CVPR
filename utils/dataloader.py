@@ -15,8 +15,8 @@ from torch.utils.data.distributed import DistributedSampler
 from .untils import tokenize
 
 DATASET_PIXEL_STATS = {
-    "NUAA-SIRST": {"mean": [110.34], "std": [58.02]},
-    "NUAA_SIRST": {"mean": [110.34], "std": [58.02]},
+    "NUAA-SIRST": {"mean": [109.34], "std": [57.02]},
+    "NUAA_SIRST": {"mean": [109.34], "std": [57.02]},
     "NUDT-SIRST": {"mean": [107.02], "std": [55.56]},
     "NUDT_SIRST": {"mean": [107.02], "std": [55.56]},
     "XD-SIRST": {"mean": [87.35], "std": [59.71]},
