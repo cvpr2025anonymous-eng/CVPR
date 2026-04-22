@@ -21,7 +21,6 @@ except ImportError:
 
 
 
-
 class Bottleneck(nn.Module):
 
     expansion = 4
