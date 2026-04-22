@@ -151,7 +151,7 @@ def final_iou_loss(
     smooth: float = 1e-6,
     iou_weight: float = 0.8,
     bce_weight: float = 0.2,
-    pos_weight: float = 5.0,
+    pos_weight: float = 10.0,
 ) -> Dict[str, torch.Tensor]:
     loss_fn = FinalOnlyLoss(
         smooth=smooth,
