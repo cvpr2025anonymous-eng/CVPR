@@ -58,7 +58,7 @@ def get_args_parser():
     parser.add_argument("--min_lr", default=1e-6, type=float)
 
     parser.add_argument("--start_epoch", default=1, type=int)
-    parser.add_argument("--max_epoch_num", default=200, type=int)
+    parser.add_argument("--max_epoch_num", default=400, type=int)
     parser.add_argument(
         "--input_size",
         nargs=2,
