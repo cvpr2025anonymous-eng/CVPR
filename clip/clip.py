@@ -6,7 +6,6 @@ from packaging import version
 from typing import Union, List
 from torchvision.transforms import ToPILImage
 
-
 import torch
 from PIL import Image
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
