@@ -7,7 +7,6 @@ from .image_encoder_saist import ImageEncoderViT
 from .mask_decoder_saist import MaskDecoder
 from .prompt_encoder_saist import PromptEncoder
 
-
 class Sam(nn.Module):
     mask_threshold: float = 0.5
     image_format: str = "RGB"
