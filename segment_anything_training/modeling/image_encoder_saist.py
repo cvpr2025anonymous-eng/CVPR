@@ -6,7 +6,6 @@ from typing import List, Optional, Tuple, Type
 
 from .common import LayerNorm2d, MLPBlock
 
-
 class ImageEncoderViT(nn.Module):
     def __init__(
             self,
