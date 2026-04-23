@@ -21,9 +21,11 @@ class MaskPromptFeatureBlock(nn.Module):
         out_chans: int,
         stride: int = 1,
         use_layernorm: bool = True,
+        use_spatial_attention: bool = False,
         activation: Type[nn.Module] = nn.GELU,
     ) -> None:
         super().__init__()
+        self.use_spatial_attention = use_spatial_attention
         self.conv1 = nn.Conv2d(
             in_chans,
             out_chans,
@@ -52,6 +54,8 @@ class MaskPromptFeatureBlock(nn.Module):
         )
         self.norm3 = LayerNorm2d(out_chans) if use_layernorm else nn.Identity()
         self.act = activation()
+        if use_spatial_attention:
+            self.spatial_att = nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=True)
         if stride != 1 or in_chans != out_chans:
             self.downsample = nn.Sequential(
                 nn.Conv2d(in_chans, out_chans, kernel_size=1, stride=stride, bias=False),
@@ -64,7 +68,17 @@ class MaskPromptFeatureBlock(nn.Module):
         x = self.act(self.norm1(self.conv1(x)))
         x = self.act(self.norm2(self.conv2(x)))
         x = self.norm3(self.conv3(x))
+        if self.use_spatial_attention:
+            attn_input = torch.cat(
+                [
+                    x.mean(dim=1, keepdim=True),
+                    x.amax(dim=1, keepdim=True),
+                ],
+                dim=1,
+            )
+            x = x * torch.sigmoid(self.spatial_att(attn_input))
         return self.act(x + identity)
+
 
 class PromptEncoder(nn.Module):
     def __init__(
@@ -117,6 +131,7 @@ class PromptEncoder(nn.Module):
             16,
             stride=1,
             use_layernorm=True,
+            use_spatial_attention=False,
             activation=activation,
         )
         self.mask_prompt_level1 = MaskPromptFeatureBlock(
@@ -124,6 +139,7 @@ class PromptEncoder(nn.Module):
             32,
             stride=2,
             use_layernorm=True,
+            use_spatial_attention=False,
             activation=activation,
         )
         self.mask_prompt_level2 = MaskPromptFeatureBlock(
@@ -131,6 +147,7 @@ class PromptEncoder(nn.Module):
             64,
             stride=2,
             use_layernorm=True,
+            use_spatial_attention=True,
             activation=activation,
         )
 
