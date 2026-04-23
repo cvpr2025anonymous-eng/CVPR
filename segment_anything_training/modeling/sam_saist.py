@@ -2,7 +2,6 @@ import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
 from typing import Any, Dict, List, Tuple, Optional
-
 from .image_encoder_saist import ImageEncoderViT
 from .mask_decoder_saist import MaskDecoder
 from .prompt_encoder_saist import PromptEncoder
