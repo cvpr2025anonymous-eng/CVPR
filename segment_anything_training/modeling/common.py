@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from typing import Type
 
-
 class MLPBlock(nn.Module):
     def __init__(
         self,
