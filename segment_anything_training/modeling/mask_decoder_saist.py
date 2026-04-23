@@ -3,7 +3,6 @@ from torch import nn
 from torch.nn import functional as F
 from typing import List, Tuple, Type, Union
 from copy import deepcopy
-
 from .common import LayerNorm2d
 
 class MultiLevelSceneAdapter(nn.Module):
